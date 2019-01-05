@@ -1,0 +1,13 @@
+bokeh
+flask
+flask_restful
+folium
+geojson
+geopy
+moviepy
+pandas
+psycopg2
+requests
+seaborn
+selenium
+shapely
