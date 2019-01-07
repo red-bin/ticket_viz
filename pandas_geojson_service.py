@@ -4,7 +4,10 @@ import pickle
 import json
 import pandas
 
+from hashlib import md5
+
 from datetime import datetime
+from os import stat
 
 from flask import Flask, request
 from flask_restful  import Resource, Api
@@ -28,7 +31,7 @@ column_types = {
 parse_dates=['issue_date']
 datas = pandas.read_csv('data/tickets.csv', dtype=column_types, parse_dates=parse_dates, infer_datetime_format=True)
 
-with open('data/grid_canvas_cropped.geojson', 'r') as fh:
+with open('data/blank_grid_mercator.geojson', 'r') as fh:
     empty_grid_json = json.load(fh)
 
 def geojson_from_df(df):
@@ -41,15 +44,34 @@ def geojson_from_df(df):
         grid_id = feat_props['ID']
 
         if 'geometry' in feature and not feature['geometry']:
-            print('wot', grid_id)
+            print('Geometry missing from ', grid_id)
             continue
 
         if grid_id in grid_vals_dict:
-            feature['properties']['data_val'] = int(grid_vals_dict[grid_id])
+            data_val = int(grid_vals_dict[grid_id])
+            if data_val <= 0:
+                continue
+
+            feature['properties']['data_val'] = data_val
         else:
-            feature['properties']['data_val'] = 0
+            continue
 
         new_feats.append(feature)
+
+    if not any(new_feats):
+        new_feats.append(
+    {
+      "type": "Feature",
+      "properties": {"data_val": 0},
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+[[[-9789724.66045665, 5107551.543942757],[-9742970.474323519, 5107551.543942757]],
+ [[-9742970.474323519, 5164699.247119262],[-9789724.66045665, 5164699.247119262]]],
+        ]
+      }
+    })
+
 
     ret_geojson = {
         'type': 'FeatureCollection',
@@ -63,7 +85,19 @@ def get_data(violation_descriptions, dows, start_time, end_time,
         start_hour, end_hour, wards, dept_categories, ticket_queues,
         include_cbd, agg_mode):
 
-    print("got here?")
+    #hash of dict = cache file location
+    md5obj = md5()
+    md5obj.update(str([violation_descriptions, dows, start_time,
+        end_time, start_hour, end_hour, wards, dept_categories,
+        ticket_queues, include_cbd, agg_mode]).encode('utf-8'))
+
+    request_hash = md5obj.hexdigest()
+
+    cached_geojson = get_cached_geojson(request_hash)
+
+    if cached_geojson:
+        return cached_geojson
+
     global datas
     new_datas = datas.copy()
 
@@ -119,14 +153,29 @@ def get_data(violation_descriptions, dows, start_time, end_time,
     geojson_ret = geojson_from_df(pre_geojson_df)
     print(len(new_datas))
 
+    cache_results(geojson_ret, request_hash)
+
     return geojson_ret
 
 app = Flask(__name__)
 api = Api(app)
 
-class HelloWorld(Resource):
+def cache_results(geojson_data, filename, path='/opt/ticket_viz/cache'):
+    with open('{}/{}'.format(path, filename), 'w') as fh:
+        json.dump(geojson_data, fh)
+
+def get_cached_geojson(filename, path='/opt/ticket_viz/cache'):
+    try:
+        with open('{}/{}'.format(path, filename)) as fh:
+            return json.load(fh)
+    except:
+        return None
+
+class GeoJsonEndpoint(Resource):
     def get(self):
         print(request.form['data'])
+
+
         req_json = json.loads(request.form['data'])
 
         violation_descriptions = req_json['violation_descriptions']
@@ -146,11 +195,10 @@ class HelloWorld(Resource):
                        dept_categories, ticket_queues, 
                        include_cbd, agg_mode)
 
-        #ret_data = json.dumps(ret_data)
 
         return json.dumps(ret_data)
 
-api.add_resource(HelloWorld, '/')
+api.add_resource(GeoJsonEndpoint, '/')
 
 if __name__ == '__main__':
     app.run(debug=True)

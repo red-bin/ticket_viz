@@ -11,6 +11,8 @@ import pickle
 import csv
 import json
 
+import seaborn as sns
+
 from bokeh.io import show, output_notebook, output_file, curdoc
 from bokeh.models import (
     GeoJSONDataSource,
@@ -26,14 +28,19 @@ from bokeh.models import (
     ColorBar,
     BasicTicker,
     Toggle,
-    LogTicker
+    LogTicker,
+    WMTSTileSource
 )
+from bokeh.tile_providers import CARTODBPOSITRON as tileset
+#from bokeh.tile_providers import STAMEN_TONER as tileset
 
 from time import sleep
 import geojson
 
+from bokeh.models.tools import WheelZoomTool, PanTool
+
 from bokeh.plotting import figure
-from bokeh.palettes import Magma256 as palette
+from bokeh.palettes import Greys9 as palette
 from bokeh.models.widgets import Slider, Select, TextInput
 from bokeh.models.widgets import Button
 from bokeh.layouts import layout, widgetbox
@@ -69,7 +76,6 @@ def get_new_data():
         data = {'data': json.dumps(request_json)}
         ret = requests.get('http://localhost:5000/', data=data)
 
-        print("got here?")
         return ret.json()
 
     min_date, max_date = date_selector.value_as_datetime
@@ -105,7 +111,7 @@ def get_new_data():
 
     return ret_geojson
 
-with open('/tmp/newgeojson.geojson','r') as f: 
+with open('/opt/ticket_viz/cache/308022eab500a094b346e6c75c5868ee','r') as f: 
     geo_source = GeoJSONDataSource(geojson=f.read())
 
 date_selector = DateRangeSlider(title='Date', start=date(2013,1,1), 
@@ -133,23 +139,40 @@ source_json = geojson.loads(geo_source.geojson)
 data_vals = [source_json[i]['properties']['data_val'] for i in range(len(source_json['features']))]
 min_val = min(data_vals)
 max_val = max(data_vals)
-color_mapper = LinearColorMapper(palette=palette, low=min_val, high=max_val)
 
-tooltips = [("Ticker Count", "@data_val")]
-geomap = figure(background_fill_color='black', plot_width=600, tools='', tooltips=tooltips)
+
+#palette = sns.cubehelix_palette(128, start=.5, rot=-.90).as_hex()
+palette = sns.cubehelix_palette(128, dark=0).as_hex()
+#palette = sns.dark_palette("red").as_hex()
+
+color_mapper = LogColorMapper(palette, low=min_val, high=max_val)
+
+tooltips = [("Ticket Count", "@data_val")]
+
+
+geomap = figure(background_fill_color=None, plot_width=600, tooltips=tooltips, tools='',  x_axis_type="mercator", y_axis_type="mercator", x_range=(-9789724.66045665, -9742970.474323519), y_range=(5107551.543942757,5164699.247119262))
+
+geomap.add_tile(tileset)
+
 geomap.xaxis.visible = False
 geomap.yaxis.visible = False
 geomap.grid.grid_line_color = None
 
+wheel_zoom = WheelZoomTool()
+pan_tool = PanTool()
+tools = (wheel_zoom, pan_tool)
 
-geomap.patches('xs','ys', source=geo_source, fill_color={'field': 'data_val', 'transform': color_mapper}, line_color=None, line_width=None)
+geomap.add_tools(*tools)
+geomap.toolbar.active_scroll = wheel_zoom
 
-with open('/opt/data/shapefiles/Boundaries - City.geojson') as f:
-    boundary_geodata = GeoJSONDataSource(geojson=f.read())
-geomap.patches('xs','ys', source=boundary_geodata, fill_color=None, line_color='#212F3D')
+#geomap.toolbar.active_scroll =  [t for t in geomap.tools if t.ref['type'] == 'WheelZoomTool']
+
+geomap.patches('xs','ys', source=geo_source, fill_color={'field': 'data_val', 'transform': color_mapper}, line_color='black', line_width=.01, fill_alpha=0.9)
+
+#with open('/opt/data/shapefiles/Boundaries - City.geojson') as f:
+#    boundary_geodata = GeoJSONDataSource(geojson=f.read())
+#geomap.patches('xs','ys', source=boundary_geodata, fill_color=None, line_color='#212F3D')
  
-#'j7a8UGOL6p$y'
-
 def update():
     start_time = datetime.now()
     print("Updating...")
@@ -168,19 +191,18 @@ def update():
         val = 0 if not val else val
         tmp_data_vals.append(val)
 
-    print("hey!")
     data_vals = tmp_data_vals
 
     if not data_vals:
-        min_val = 1
+        min_val = 0
         max_val = 1
+
     else:
         min_val = round(min(data_vals))
         max_val = round(max(data_vals))
 
-    #if min_val < 1:
-    #    min_val = 1
-
+    if min_val < 0:
+        min_val = 0
     if max_val <= 0:
         max_val = 1
 
@@ -191,17 +213,20 @@ def update():
     end_time = datetime.now()
     time_delta = (end_time - start_time).seconds
 
+    hover_tool = [t for t in geomap.tools if t.ref['type'] == 'HoverTool'][0]
+    print(hover_tool)
+    
     if select_type_radios.active == 0:
-        geomap.tools[0].tooltips = [("Ticker Count", "@data_val")]
+        hover_tool.tooltips = [("Ticker Count", "@data_val")]
 
     if select_type_radios.active == 1:
-        geomap.tools[0].tooltips = [("$ Dued", "@data_val")]
+        hover_tool.tooltips = [("$ Dued", "@data_val")]
 
     if select_type_radios.active == 2:
-        geomap.tools[0].tooltips = [("$ Paid", "@data_val")]
+        hover_tool.tooltips = [("$ Paid", "@data_val")]
         
     if select_type_radios.active == 3:
-        geomap.tools[0].tooltips = [("$ in Penalties", "@data_val")]
+        hover_tool.tooltips = [("$ in Penalties", "@data_val")]
         
     print("done updating - took {} seconds".format(time_delta))
     update_button.label = "Update"
@@ -211,7 +236,7 @@ update_button = Button()
 update_button.label = "Update"
 update_button.on_click(update)
 
-central_bus_toggle = Toggle(label="Ignore Central Business District", active=True)
+central_bus_toggle = Toggle(label="Ignore Central Business District", active=False)
 
 rbg_div = Div(text="Display by: ")
 select_type_radios = RadioButtonGroup(
@@ -221,11 +246,11 @@ wards_opts = ['All'] + list(map(str, range(1,51)))
 wards_selector = MultiSelect(title="Ward #:", value=['All'], options=wards_opts, size=5)
 
 #ticker
-color_bar = ColorBar(color_mapper=color_mapper, ticker=BasicTicker(desired_num_ticks=10), location=(0,0))
+color_bar = ColorBar(color_mapper=color_mapper, ticker=LogTicker(desired_num_ticks=8), location=(0,0))
 geomap.add_layout(color_bar, 'right')
 geomap.right[0].formatter.use_scientific = False
 
-controls = [date_selector, violation_selector, dow_selector, hours_selector, wards_selector, 
+controls = [date_selector, hours_selector, dow_selector, violation_selector, wards_selector, 
             dpt_categ_selector, queue_selector, rbg_div, select_type_radios, central_bus_toggle,  update_button]
 
 inputs = widgetbox(*controls, sizing_mode='fixed', width=350)
