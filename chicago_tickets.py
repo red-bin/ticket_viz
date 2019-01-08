@@ -76,6 +76,8 @@ def get_new_data():
         data = {'data': json.dumps(request_json)}
         ret = requests.get('http://localhost:5000/', data=data)
 
+        print(type(ret.json()))
+
         return ret.json()
 
     min_date, max_date = date_selector.value_as_datetime
@@ -152,6 +154,8 @@ tooltips = [("Ticket Count", "@data_val")]
 
 geomap = figure(background_fill_color=None, plot_width=600, tooltips=tooltips, tools='',  x_axis_type="mercator", y_axis_type="mercator", x_range=(-9789724.66045665, -9742970.474323519), y_range=(5107551.543942757,5164699.247119262))
 
+geomap.title.text = "Chicago Parking Tickets Map"
+
 geomap.add_tile(tileset)
 
 geomap.xaxis.visible = False
@@ -165,9 +169,7 @@ tools = (wheel_zoom, pan_tool)
 geomap.add_tools(*tools)
 geomap.toolbar.active_scroll = wheel_zoom
 
-#geomap.toolbar.active_scroll =  [t for t in geomap.tools if t.ref['type'] == 'WheelZoomTool']
-
-geomap.patches('xs','ys', source=geo_source, fill_color={'field': 'data_val', 'transform': color_mapper}, line_color='black', line_width=.01, fill_alpha=0.9)
+geomap.patches('title'='xs','ys', source=geo_source, fill_color={'field': 'data_val', 'transform': color_mapper}, line_color='black', line_width=.01, fill_alpha=0.9)
 
 #with open('/opt/data/shapefiles/Boundaries - City.geojson') as f:
 #    boundary_geodata = GeoJSONDataSource(geojson=f.read())
@@ -253,7 +255,7 @@ geomap.right[0].formatter.use_scientific = False
 controls = [date_selector, hours_selector, dow_selector, violation_selector, wards_selector, 
             dpt_categ_selector, queue_selector, rbg_div, select_type_radios, central_bus_toggle,  update_button]
 
-inputs = widgetbox(*controls, sizing_mode='fixed', width=350)
+inputs = widgetbox(*controls, sizing_mode='fixed', width=400)
 
 l = layout([[inputs, geomap]], sizing_mode='fixed')
 
