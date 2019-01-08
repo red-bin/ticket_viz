@@ -169,7 +169,7 @@ tools = (wheel_zoom, pan_tool)
 geomap.add_tools(*tools)
 geomap.toolbar.active_scroll = wheel_zoom
 
-geomap.patches('title'='xs','ys', source=geo_source, fill_color={'field': 'data_val', 'transform': color_mapper}, line_color='black', line_width=.01, fill_alpha=0.9)
+geomap.patches('xs','ys', source=geo_source, fill_color={'field': 'data_val', 'transform': color_mapper}, line_color='black', line_width=.01, fill_alpha=0.9)
 
 #with open('/opt/data/shapefiles/Boundaries - City.geojson') as f:
 #    boundary_geodata = GeoJSONDataSource(geojson=f.read())

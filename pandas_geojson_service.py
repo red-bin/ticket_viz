@@ -29,9 +29,9 @@ column_types = {
 }
 
 parse_dates=['issue_date']
-datas = pandas.read_csv('data/tickets.csv', dtype=column_types, parse_dates=parse_dates, infer_datetime_format=True)
+datas = pandas.read_csv('/opt/ticket_viz/data/tickets.csv', dtype=column_types, parse_dates=parse_dates, infer_datetime_format=True)
 
-with open('data/blank_grid_mercator.geojson', 'r') as fh:
+with open('/opt/ticket_viz/data/blank_grid_mercator.geojson', 'r') as fh:
     empty_grid_json = json.load(fh)
 
 def geojson_from_df(df):
@@ -194,7 +194,6 @@ class GeoJsonEndpoint(Resource):
                        end_time, start_hour, end_hour, wards,
                        dept_categories, ticket_queues, 
                        include_cbd, agg_mode)
-
 
         return json.dumps(ret_data)
 
