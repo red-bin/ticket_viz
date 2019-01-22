@@ -57,7 +57,7 @@ def get_new_data():
 
     def request_geojson(min_date, max_date, violation_descriptions, dows,
             min_hour, max_hour, wards, dept_categories, ticket_queues,
-            include_cbd, agg_mode):
+            include_cbd, agg_mode, normalize_by):
 
         request_json = {
             'violation_descriptions': violation_descriptions,
@@ -70,7 +70,8 @@ def get_new_data():
             'dept_categories': dept_categories,
             'ticket_queues': ticket_queues,
             'include_cbd': include_cbd,
-            'agg_mode': agg_mode
+            'agg_mode': agg_mode,
+            'normalize_by': normalize_by,
         }
 
         data = {'data': json.dumps(request_json)}
@@ -99,6 +100,9 @@ def get_new_data():
     elif select_type_radios.active == 3:
         agg_mode = 'penalties'
 
+    if select_normalize_radios.active == 0:
+        normalize_by = 'total_population'
+
     ret_geojson = request_geojson(min_date=min_date, 
                      max_date=max_date, 
                      violation_descriptions=tuple(violation_selector.value),
@@ -109,11 +113,12 @@ def get_new_data():
                      dept_categories=tuple(dpt_categ_selector.value),
                      ticket_queues=tuple(queue_selector.value),
                      include_cbd=include_cbd,
-                     agg_mode=agg_mode)
+                     agg_mode=agg_mode,
+                     normalize_by=normalize_by)
 
     return ret_geojson
 
-with open('/opt/ticket_viz/cache/308022eab500a094b346e6c75c5868ee','r') as f: 
+with open('/opt/ticket_viz/data/default_geojson','r') as f: 
     geo_source = GeoJSONDataSource(geojson=f.read())
 
 date_selector = DateRangeSlider(title='Date', start=date(2013,1,1), 
@@ -171,10 +176,6 @@ geomap.toolbar.active_scroll = wheel_zoom
 
 geomap.patches('xs','ys', source=geo_source, fill_color={'field': 'data_val', 'transform': color_mapper}, line_color='black', line_width=.01, fill_alpha=0.9)
 
-#with open('/opt/data/shapefiles/Boundaries - City.geojson') as f:
-#    boundary_geodata = GeoJSONDataSource(geojson=f.read())
-#geomap.patches('xs','ys', source=boundary_geodata, fill_color=None, line_color='#212F3D')
- 
 def update():
     start_time = datetime.now()
     print("Updating...")
@@ -208,7 +209,6 @@ def update():
     if max_val <= 0:
         max_val = 1
 
-
     color_mapper.low = min_val
     color_mapper.high = max_val
 
@@ -240,9 +240,14 @@ update_button.on_click(update)
 
 central_bus_toggle = Toggle(label="Ignore Central Business District", active=False)
 
-rbg_div = Div(text="Display by: ")
+select_rbg_div = Div(text="Display by: ")
 select_type_radios = RadioButtonGroup(
         labels=["Count", "Due", "Paid", "Penalties"], active=0)
+
+normalize_rbg_div = Div(text="Normalize by: ")
+
+select_normalize_radios = RadioButtonGroup(
+        labels=["Population"], active=0)
 
 wards_opts = ['All'] + list(map(str, range(1,51)))
 wards_selector = MultiSelect(title="Ward #:", value=['All'], options=wards_opts, size=5)
@@ -252,8 +257,9 @@ color_bar = ColorBar(color_mapper=color_mapper, ticker=LogTicker(desired_num_tic
 geomap.add_layout(color_bar, 'right')
 geomap.right[0].formatter.use_scientific = False
 
-controls = [date_selector, hours_selector, dow_selector, violation_selector, wards_selector, 
-            dpt_categ_selector, queue_selector, rbg_div, select_type_radios, central_bus_toggle,  update_button]
+controls = [date_selector, hours_selector, dow_selector, violation_selector, wards_selector,
+            dpt_categ_selector, queue_selector, select_rbg_div, select_type_radios, 
+            central_bus_toggle, select_normalize_radios, update_button]
 
 inputs = widgetbox(*controls, sizing_mode='fixed', width=400)
 

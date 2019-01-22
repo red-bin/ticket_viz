@@ -5,10 +5,11 @@ import csv
 
 from sys import argv
 
+import viz_config
+
 def pg_conn():  
-     connstr = "dbname=tickets host=localhost user=sdfjksdf password=sdfskjlga"
-     conn = psycopg2.connect(connstr)  
-     return conn  
+     conn = psycopg2.connect(viz_config.connection_str)  
+     return conn
  
 conn = pg_conn() 
 curs = conn.cursor() 
@@ -35,7 +36,7 @@ AND issue_date > '2018-03-01'
 GROUP BY grid_id, violation_description, make_date(year, month, dom), dow, year, hour, ward, department_category,
     ticket_queue, is_business_district, current_amount_due, total_payments, penalty ;""")
 
-w = csv.writer(open('/dev/shm/tickets.csv','w'))
+w = csv.writer(open('/opt/ticket_viz/data/tickets.csv','w'))
 
 cols = ['grid_id', 'violation_description', 'issue_date', 'dow', 'year','hour', 'ward', 'department_category', 'ticket_queue', 'is_business_district', 'current_amount_due', 'total_payments', 'penalty']
 

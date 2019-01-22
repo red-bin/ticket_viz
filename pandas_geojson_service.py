@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-import pickle
+import csv
 import json
 import pandas
 
@@ -12,6 +12,7 @@ from os import stat
 from flask import Flask, request
 from flask_restful  import Resource, Api
 
+import viz_config
 
 column_types = {
     'grid_id':int,
@@ -31,11 +32,20 @@ column_types = {
 parse_dates=['issue_date']
 datas = pandas.read_csv('/opt/ticket_viz/data/tickets.csv', dtype=column_types, parse_dates=parse_dates, infer_datetime_format=True)
 
+pop_ratios = {}
+with open('/opt/ticket_viz/data/census_grid_data.csv','r') as fh:
+    reader = csv.DictReader(fh)
+
+    for line in reader:
+        grid_id = int(line['ID'])
+        pop_ratios[grid_id] = float(line['TOTAL_POPULATION_RATIO'])
+
 with open('/opt/ticket_viz/data/blank_grid_mercator.geojson', 'r') as fh:
     empty_grid_json = json.load(fh)
 
 def geojson_from_df(df):
     grid_vals_dict = dict(df)
+    print('grid_vals_dict', grid_vals_dict)
 
     new_feats = []
 
@@ -48,15 +58,20 @@ def geojson_from_df(df):
             continue
 
         if grid_id in grid_vals_dict:
-            data_val = int(grid_vals_dict[grid_id])
-            if data_val <= 0:
+            print("hommmm")
+            data_val = grid_vals_dict[grid_id]
+            print(data_val)
+            if data_val <= 0.000000:
                 continue
 
             feature['properties']['data_val'] = data_val
         else:
+            print("hmmmm")
             continue
 
         new_feats.append(feature)
+
+    print('new_feats', new_feats)
 
     if not any(new_feats):
         new_feats.append(
@@ -81,9 +96,28 @@ def geojson_from_df(df):
 
     return ret_geojson
 
+def normalize_geojson_data(df, normalize_by):
+    print("normalize by:", normalize_by)
+    total = df.sum()
+    data_dict = dict(df)
+
+    for grid_id, data_val in data_dict.items():
+        ratio = data_val / total
+
+        if normalize_by == 'total_population':
+            normalize_ratio = pop_ratios[grid_id]
+
+        normalized_ratio = ratio * normalize_ratio
+        data_dict[grid_id] = normalized_ratio
+
+    ret_df = pandas.DataFrame()
+    ret_df = ret_df.from_dict(data_dict, orient='index')
+        
+    return ret_df
+
 def get_data(violation_descriptions, dows, start_time, end_time, 
         start_hour, end_hour, wards, dept_categories, ticket_queues,
-        include_cbd, agg_mode):
+        include_cbd, agg_mode, normalize_by):
 
     #hash of dict = cache file location
     md5obj = md5()
@@ -107,7 +141,6 @@ def get_data(violation_descriptions, dows, start_time, end_time,
         violation_descriptions = list(map(str.upper, violation_descriptions))
         print(violation_descriptions)
         new_datas = new_datas[new_datas.violation_description.isin(violation_descriptions)]
-
 
     if 'All' not in dows:
         new_datas = new_datas[new_datas.dow.isin(dows)]
@@ -150,7 +183,12 @@ def get_data(violation_descriptions, dows, start_time, end_time,
     if agg_mode == 'penalties': #must come last
         pre_geojson_df = new_datas.groupby('grid_id').penalty.sum()
 
+    #if normalize_by:
+        #print('normalizing')
+        #pre_geojson_df = normalize_geojson_data(pre_geojson_df, normalize_by)
+
     geojson_ret = geojson_from_df(pre_geojson_df)
+
     print(len(new_datas))
 
     cache_results(geojson_ret, request_hash)
@@ -160,21 +198,21 @@ def get_data(violation_descriptions, dows, start_time, end_time,
 app = Flask(__name__)
 api = Api(app)
 
-def cache_results(geojson_data, filename, path='/opt/ticket_viz/cache'):
+def cache_results(geojson_data, filename, path=viz_config.cache_dir):
     with open('{}/{}'.format(path, filename), 'w') as fh:
         json.dump(geojson_data, fh)
 
-def get_cached_geojson(filename, path='/opt/ticket_viz/cache'):
+def get_cached_geojson(filename):
     try:
-        with open('{}/{}'.format(path, filename)) as fh:
+        with open('{}/{}'.format(path, viz_config.cache_dir)) as fh:
             return json.load(fh)
     except:
         return None
 
+    
 class GeoJsonEndpoint(Resource):
     def get(self):
         print(request.form['data'])
-
 
         req_json = json.loads(request.form['data'])
 
@@ -190,14 +228,18 @@ class GeoJsonEndpoint(Resource):
         include_cbd = req_json['include_cbd']
         agg_mode = req_json['agg_mode']
 
-        ret_data = get_data(violation_descriptions, dows, start_time,
+        normalize_by = req_json['normalize_by'] #default = None
+        #normalize_criteria = req_json['normalize_criteria']
+
+        geojson_data = get_data(violation_descriptions, dows, start_time,
                        end_time, start_hour, end_hour, wards,
                        dept_categories, ticket_queues, 
-                       include_cbd, agg_mode)
+                       include_cbd, agg_mode, normalize_by)
 
-        return json.dumps(ret_data)
+
+        return json.dumps(geojson_data)
 
 api.add_resource(GeoJsonEndpoint, '/')
 
 if __name__ == '__main__':
-    app.run()
+    app.run(debug=viz_config.debug_mode)
