@@ -11,6 +11,13 @@ connection_str = "dbname={} host={} user={} password={}"
 conn_vars = (conf['db_name'], conf['db_host'], conf['db_user'], conf['db_pass'])
 
 connection_str = connection_str.format(*conn_vars)
-debug_mode = conf['debug_mode']
 cache_dir = conf['cache_dir']
-census_geojson = conf['census_geojson']
+census_csv = conf['census_csv']
+empty_grid_geojson = conf['empty_grid_geojson']
+environment = conf['environment']
+
+if environment in ['prod', 'dev', 'superprod']:
+    tickets_csv = conf['tickets_csv'].format(environment)
+else:
+    print('environment must be "prod" or "dev" or "superprod"')
+    exit(1)
