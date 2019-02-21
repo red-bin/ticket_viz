@@ -5,16 +5,20 @@ from datetime import date
 import requests
 
 from datetime import datetime
+from datetime import timedelta
 
-import pickle
+from math import pi
 
 import csv
 import json
 
 import seaborn as sns
 
+from bokeh.models.annotations import Title
+
 from bokeh.io import show, output_notebook, output_file, curdoc
 from bokeh.models import (
+    FactorRange,
     GeoJSONDataSource,
     HoverTool,
     LinearColorMapper,
@@ -30,7 +34,9 @@ from bokeh.models import (
     Toggle,
     LogTicker,
     WMTSTileSource,
-    ColumnDataSource
+    CategoricalScale,
+    ColumnDataSource,
+    CustomJS
 )
 from bokeh.tile_providers import CARTODBPOSITRON as tileset
 #from bokeh.tile_providers import STAMEN_TONER as tileset
@@ -38,26 +44,25 @@ from bokeh.tile_providers import CARTODBPOSITRON as tileset
 from time import sleep
 import geojson
 
-from bokeh.models.tools import WheelZoomTool, PanTool
+from bokeh.models.tools import WheelZoomTool, PanTool, ResetTool
 
 from bokeh.plotting import figure
 from bokeh.palettes import Category20
 from bokeh.models.widgets import Slider, Select, TextInput
 from bokeh.models.widgets import Button
-from bokeh.layouts import layout, widgetbox
+from bokeh.layouts import layout, widgetbox, column
 
 from dropdown_opts import violation_opts
 
 from bokeh.transform import log_cmap, linear_cmap
 
 violation_opts = [i.title() for i in violation_opts]
-violation_opts[0] = 'All'
 
 def get_new_data():
     weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
     def request_data(min_date, max_date, violation_descriptions, dows,
             min_hour, max_hour, wards, dept_categories, ticket_queues,
-            include_cbd, agg_mode, chart_by):
+            include_cbd, agg_mode, chart_by, chart_mode):
 
         request_json = {
             'violation_descriptions': violation_descriptions,
@@ -73,6 +78,7 @@ def get_new_data():
             'agg_mode': agg_mode,
             #'normalize_by': normalize_by,
             'chart_by': chart_by,
+            'chart_mode': chart_mode,
         }
 
         data = {'data': json.dumps(request_json)}
@@ -89,14 +95,9 @@ def get_new_data():
         dows = [weekdays.index(i) for i in dow_selector.value]
 
     include_cbd = False if central_bus_toggle.active else True
-    if select_type_radios.active == 0:
-        agg_mode = 'count'
-    elif select_type_radios.active == 1:
-        agg_mode = 'due'
-    elif select_type_radios.active == 2:
-        agg_mode = 'paid'
-    elif select_type_radios.active == 3:
-        agg_mode = 'penalties'
+
+    agg_modes = ['count', 'due', 'paid', 'penalties']
+    agg_mode = agg_modes[select_type_radios.active]
 
     #if select_normalize_radios.active == 0:
     #    normalize_by = None
@@ -105,17 +106,22 @@ def get_new_data():
     #elif select_normalize_radios.active == 2:
     #    normalize_by = 'percent'
 
-    active_chart_radio = select_chart_radios.active
-    if active_chart_radio == 0:
-        chart_by = 'violation_description'
-    elif active_chart_radio == 1:
-        chart_by = 'department_category'
-    elif active_chart_radio == 2:
-        chart_by = 'ward'
+    chart_bys = ['violation_description', 'department_category', 'ward']
+    chart_by = chart_bys[select_chart_radios.active]
+
+    chart_modes = ['count', 'cummulative', 'histogram']
+    chart_mode = chart_modes[chart_rbg_radios.active]
+
+    violation_descriptions = []
+    for viol in tuple(violation_selector.value):
+        if viol == 'All': #remove from 
+            violation_descriptions.append('All')
+        else:
+            violation_descriptions.append(violation_opts.index(viol))
 
     resp_str = request_data(min_date=min_date, 
                      max_date=max_date, 
-                     violation_descriptions=tuple(violation_selector.value),
+                     violation_descriptions=violation_descriptions,
                      dows=tuple(dows),
                      min_hour=round(min_hour),
                      max_hour=round(max_hour),
@@ -125,46 +131,81 @@ def get_new_data():
                      include_cbd=include_cbd,
                      agg_mode=agg_mode,
                      #normalize_by=normalize_by,
-                     chart_by=chart_by)
+                     chart_by=chart_by,
+                     chart_mode=chart_mode)
 
     ret = json.loads(resp_str)
     return ret['geojson'], ret['timeseries_data']
 
-def update_chart(timeseries_data):
-    chart_palette = sns.color_palette("Paired", len(timeseries_data.keys())+1).as_hex()
-
-    datetime_xs = []
-    for raw_xs in timeseries_data['xs']:
-        datetime_xs.append([datetime.strptime(x, '%Y-%m-%d') for x in raw_xs])
-
-    timeseries_data['xs_datetime'] = datetime_xs
-
-
-#    for key, vals in timeseries_data.items():
-    line_opts = {
-        'xs': 'xs_datetime',
-        'ys': 'ys',
-        'line_width': 1.5,
-        'line_alpha': .7,
-        #'line_color': chart_palette.pop(0),
-        'source': ColumnDataSource(timeseries_data),
-        'name': 'test123'
-    }
+def clear_chart():
     global chart_lines
     if chart_lines:
         chart.renderers.remove(chart_lines)
-        
-    chart_lines = chart.multi_line(**line_opts)
 
-    chart_tooltips=[
-        ("value", "$y{int}"),
-        ("date", "$x{%Y-%m-%d}"),
-        ("name", "@keys"),
-    ]
-    chart.add_tools(HoverTool(tooltips=chart_tooltips, formatters={'xs': 'datetime'}))
+def update_chart(timeseries_data):
+    #chart_palette = sns.color_palette("Paired", len(timeseries_data['xs'])).as_hex()
+    ts_size = len(timeseries_data['xs'])
+    chart_palette = sns.hls_palette(ts_size, l=.5, s=.6).as_hex()
 
-    #hover_tool = [t for t in chart.tools if t.ref['type'] == 'HoverTool'][0]
-    #hover_tool.tooltips = chart_tooltips
+    chart_modes = ['count', 'cummulative', 'histogram']
+    chart_mode = chart_modes[chart_rbg_radios.active]
+
+    clear_chart()
+
+    #if time-based, convert x axis to datetime
+    if chart_mode in ['count', 'cummulative']:
+        #chart.x_scale = None
+
+        datetime_xs = []
+        for raw_xs in timeseries_data['xs']:
+            datetime_xs.append([datetime.strptime(x, '%Y-%m-%d') for x in raw_xs])
+    
+        timeseries_data['xs_datetime'] = datetime_xs
+
+        timeseries_data['line_color'] = chart_palette
+    
+    
+    #    for key, vals in timeseries_data.items():
+        line_opts = {
+            'xs': 'xs_datetime',
+            'ys': 'ys',
+            'line_width': 1.5,
+            'line_alpha': .7,
+            'line_color': 'line_color',
+            'source': ColumnDataSource(timeseries_data),
+        }
+
+        min_date, max_date = date_selector.value_as_datetime
+        inbetween = [min_date + timedelta(days=x) for x in range(0, (max_date - min_date).days)]
+        inbetween_str = [datetime.strftime(d, '%Y-%m-%d') for d in inbetween] 
+
+        #del chart.x_range.factors 
+        global chart_lines
+        #chart_lines = chart.multi_line(**line_opts)
+        chart_lines = chart.multi_line(**line_opts)
+    
+        chart_tooltips=[
+            ("value", "$y{int}"),
+            ("Date", "$x{%F}"),
+            ("name", "@keys"),
+        ]
+
+        chart_bys = ['Violation Name', 'Department Class', 'Ward no.']
+        chart_by = chart_bys[select_chart_radios.active]
+ 
+        chart_modes = ['Daily Count', 'Cummulative']
+        chart_mode = chart_modes[chart_rbg_radios.active]
+
+        chart_title.text = '{} of tickets by {}'.format(chart_mode, chart_by)
+
+        for tool in chart.tools:
+            if tool.name == 'chart_hovertool':
+                del tool
+
+        chart_hovertool = HoverTool(tooltips=chart_tooltips, formatters={'$x': 'datetime'}, line_policy='nearest', mode='mouse', name='chart_hovertool')
+        chart.add_tools(chart_hovertool)
+        chart.xaxis.visible = True
+
 
 def update():
     start_time = datetime.now()
@@ -230,14 +271,14 @@ def update():
 with open('/opt/ticket_viz/data/default_geojson','r') as f: 
     geo_source = GeoJSONDataSource(geojson=f.read())
 
-date_selector = DateRangeSlider(title='Date', start=date(1999,1,1), 
-    value=(date(1999,1,1), date(2018,5,14)), end=date(2018,5,14), 
+date_selector = DateRangeSlider(title='Date', start=date(2013,1,1), 
+    value=(date(2013,1,1), date(2018,5,14)), end=date(2018,5,14), 
     step=1, callback_policy="mouseup")
 
 hours_selector = RangeSlider(title="Hours Range", start=0, end=23, value=(0,24))
 
 violation_selector = MultiSelect(title='Violation:', value=['All'], options=violation_opts, size=4)
-violation_selector.width=100
+#violation_selector.width=100
 
 dpt_categories = ['All', 'DOF', 'CTA', 'Speed', 'Red light', 'LAZ', 
                  'CPD', 'Chicago Parking Meter', 'Miscellaneous/Other', 
@@ -264,7 +305,8 @@ geomap_tooltips = [("Ticket Count", "@data_val")]
 ##create map
 geomap_opts = {
     'background_fill_color': None, 
-    'plot_width': 600,
+    'plot_width': 800,
+    #'plot_width': 600,
     'tooltips': geomap_tooltips, 
     'tools': '',
     'x_axis_type': "mercator",
@@ -290,6 +332,9 @@ geomap_pan_tool = PanTool()
 geomap.add_tools(geomap_wheel_zoom, geomap_pan_tool)
 geomap.toolbar.active_scroll = geomap_wheel_zoom
 
+geomap.toolbar.logo = None
+geomap.toolbar_location = None
+
 #create patches initially with empty grid
 patches_opts = {
     'xs': 'xs',
@@ -303,38 +348,45 @@ patches_opts = {
 geomap.patches(**patches_opts)
 
 ##create chart
-chart_tooltips=[
-       # ("value", "@y{int}"),
-       # ("date", "@x"),
-        ("name", "$name"),
-]
+
+#start = datetime.datetime.strptime("21-06-2014", "%d-%m-%Y") 
+#end = datetime.datetime.strptime("07-07-2014", "%d-%m-%Y")
 
 chart_opts = {
-    'plot_width':1000,
+    'plot_width':800,
     'plot_height':300,
-    #'title':"",
-    'tooltips':chart_tooltips,
     'tools':'',
-    #'y_axis_type': 'log',
     'x_axis_type': 'datetime',
-    'output_backend': 'webgl'
+    'output_backend': 'webgl',
+    'title': '',
+    #'y_axis_type': "log"
 }
 
 chart = figure(**chart_opts)
-chart_wheel_zoom = WheelZoomTool()
-chart_pan_tool = PanTool()
+chart_title = Title()
+chart_title.text = "starting title"
+chart.title = chart_title
+#chart_wheel_zoom = WheelZoomTool()
+#chart_pan_tool = PanTool()
+#chart_reset_tool = ResetTool()
 
-chart.add_tools(chart_wheel_zoom, chart_pan_tool)
-chart.toolbar.active_scroll = chart_wheel_zoom
+#chart.add_tools(chart_reset_tool)
+#chart.toolbar.active_scroll = chart_wheel_zoom
+
+chart.xaxis.visible = False
+#chart.xaxis.major_label_orientation = pi/4
 chart_lines = None
+chart_hover = None
 
-#chart.xaxis.formatter=DatetimeTickFormatter(
-
+ 
+chart.toolbar.logo = None
+chart.toolbar_location = None
 
 ##create widgets
 update_button = Button()
 update_button.label = "Update"
 update_button.on_click(update)
+
 
 central_bus_toggle = Toggle(label="Ignore Central Business District", active=False)
 
@@ -342,12 +394,16 @@ select_rbg_div = Div(text="Display by: ")
 select_type_radios = RadioButtonGroup(
         labels=["Count", "Due", "Paid", "Penalties"], active=0)
 
+chart_rbg_div = Div(text="Chart type: ")
+chart_rbg_labels = ["Per Day", "Cummulative"]
+chart_rbg_radios = RadioButtonGroup(labels=chart_rbg_labels, active=0)
+
 #implement in the future
 #normalize_rbg_div = Div(text="Normalize By: ")
 #select_normalize_radios = RadioButtonGroup(
 #        labels=["None", "Population", "Percent"], active=0)
 
-chart_rbg_div = Div(text="Graph Lines By: ")
+chart_rbg_div = Div(text="Chart Lines By: ")
 select_chart_radios = RadioButtonGroup(
         labels=["Violation", "Department", "Ward"], active=0)
 
@@ -363,10 +419,13 @@ geomap.right[0].formatter.use_scientific = False
 controls = [date_selector, hours_selector, dow_selector, violation_selector, wards_selector,
             dpt_categ_selector, queue_selector, select_rbg_div, select_type_radios, 
             central_bus_toggle, chart_rbg_div, 
-            select_chart_radios, update_button]
+            select_chart_radios, chart_rbg_radios, update_button]
 
 inputs = widgetbox(*controls, sizing_mode='fixed', width=400)
 
-l = layout([[geomap], [chart], [inputs]], sizing_mode='fixed')
+col2 = column(geomap, chart)
+col1 = column(inputs)
+
+l = layout([[col1, col2]], sizing_mode='fixed')
 
 curdoc().add_root(l)

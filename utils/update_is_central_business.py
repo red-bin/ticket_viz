@@ -44,5 +44,6 @@ curs.execute("CREATE TEMP TABLE cbd (addr TEXT)")
 curs.executemany("INSERT INTO cbd VALUES (%s)", inside_cbd)
 
 curs.execute("update tickets set is_business_district = True from cbd c where c.addr = tickets.geocoded_address")
+curs.execute("update tickets set is_business_district = False where is_business_district IS NOT True")
 
 conn.commit()

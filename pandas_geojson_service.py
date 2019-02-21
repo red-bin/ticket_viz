@@ -16,9 +16,11 @@ from flask_restful  import Resource, Api
 
 import viz_config
 
+from dropdown_opts import violation_opts
+
 column_types = {
     'grid_id':int,
-    'violation_description':str,
+    'violation_description':int,
     'dow':int,
     'year':int,
     'hour':int,
@@ -31,10 +33,9 @@ column_types = {
     'penalty':float
 }
 
-parse_dates=['issue_date']
 
 datas = pandas.read_csv(viz_config.tickets_csv, dtype=column_types, 
-    parse_dates=parse_dates, infer_datetime_format=True)
+    parse_dates=['issue_date'], infer_datetime_format=True)
 
 pop_ratios = {}
 with open(viz_config.census_csv,'r') as fh:
@@ -77,7 +78,7 @@ def geojson_from_df(df):
             if data_val <= 0.00000000:
                 continue
 
-            feature['properties']['data_val'] = float(data_val)
+            feature['properties']['data_val'] = int(data_val)
         else:
             continue
 
@@ -105,9 +106,36 @@ def geojson_from_df(df):
 
     return ret_geojson
 
-def timeseries_from_df(df, agg_mode, field_by, is_cumm=True):
+def timeseries_from_df(df, agg_mode, field_by, chart_mode, hist_size=50):
     key_data = {}
     cumm_dict = {}
+
+    if chart_mode == 'histogram':
+        if agg_mode == 'count':
+            hist_data = df.groupby(field_by).current_amount_due.size()
+        if agg_mode == 'due':
+            hist_data = df.groupby(field_by).current_amount_due.sum()
+        if agg_mode == 'paid':
+            hist_data = df.groupby(field_by).total_payments.sum()
+        if agg_mode == 'penalties':
+            hist_data = df.groupby(field_by).penalty.sum()
+
+        max_val = hist_data.max()
+        #hacky way to make histogram..
+        hist_data = list(dict(hist_data).items())
+        hist_data.sort(key=lambda x: x[1], reverse=True)
+
+        xs = []
+        ys = []
+        for x, y in hist_data[:hist_size]:
+            if (y / max_val) <= .02:
+                continue
+
+            xs.append(x)
+            ys.append(float(y))
+
+        return {'xs': xs, 'ys': ys}
+
     for time, chunk_df in df.groupby('issue_date'): 
         if agg_mode == 'count':
             chunk_data = chunk_df.groupby(field_by).current_amount_due.size()
@@ -122,7 +150,7 @@ def timeseries_from_df(df, agg_mode, field_by, is_cumm=True):
             if key not in key_data.keys():
                 key_data[key] = {'xs':[], 'ys':[]}
 
-            if is_cumm and key_data[key]['xs']:
+            if chart_mode == 'cummulative' and key_data[key]['xs']:
                 val = val + key_data[key]['ys'][-1]
 
             key_data[key]['xs'].append(time.strftime('%Y-%m-%d'))
@@ -133,6 +161,13 @@ def timeseries_from_df(df, agg_mode, field_by, is_cumm=True):
         ret_dict['keys'].append(key)
         ret_dict['xs'].append(vals['xs'])
         ret_dict['ys'].append(vals['ys'])
+
+    print(field_by)
+    if field_by == 'violation_description':
+        new_keys = []
+        for k in ret_dict['keys']:
+            new_keys.append(violation_opts[k])
+        ret_dict['keys'] = new_keys
 
     return ret_dict
 
@@ -167,25 +202,28 @@ test_datas = None
 
 def get_data(violation_descriptions, dows, start_time, end_time, 
         start_hour, end_hour, wards, dept_categories, ticket_queues,
-        include_cbd, agg_mode, chart_by):
+        include_cbd, agg_mode, chart_by, chart_mode):
 
     #hash of dict = cache file location
     md5obj = md5()
     md5obj.update(str([violation_descriptions, dows, start_time,
         end_time, start_hour, end_hour, wards, dept_categories,
-        ticket_queues, include_cbd, agg_mode]).encode('utf-8'))
+        ticket_queues, include_cbd, agg_mode, chart_by, chart_mode]).encode('utf-8'))
 
     request_hash = md5obj.hexdigest()
 
     cached_geojson = get_cached_geojson(request_hash)
+    
 
     if cached_geojson:
+        print("Returning cached version")
         return cached_geojson
 
     new_datas = datas.copy()
 
     if 'All' not in violation_descriptions:
-        violation_descriptions = list(map(str.upper, violation_descriptions))
+        print(violation_descriptions)
+        #violation_descriptions = list(map(str.upper, violation_descriptions))
         new_datas = new_datas[new_datas.violation_description.isin(violation_descriptions)]
 
     if 'All' not in dows:
@@ -231,13 +269,13 @@ def get_data(violation_descriptions, dows, start_time, end_time,
     #if normalize_by:
     #    pre_geojson_df = normalize_geojson_data(pre_geojson_df, normalize_by)
 
-    timeseries_ret = timeseries_from_df(new_datas, agg_mode, field_by=chart_by)
+    timeseries_ret = timeseries_from_df(new_datas, agg_mode, field_by=chart_by, chart_mode=chart_mode)
     geojson_ret = geojson_from_df(pre_geojson_df)
 
-    if viz_config.environment == "prod":
-        cache_results(geojson_ret, request_hash)
-
     ret = {'geojson': geojson_ret, 'timeseries_data': timeseries_ret}
+
+    if viz_config.environment == "prod":
+        cache_results(ret, request_hash)
 
     return ret
 
@@ -254,9 +292,10 @@ def cache_results(geojson_data, filename, path=viz_config.cache_dir):
 
 def get_cached_geojson(filename):
     try:
-        with open('{}/{}'.format(path, viz_config.cache_dir)) as fh:
+        with open('{}/{}'.format(viz_config.cache_dir, filename)) as fh:
             return json.load(fh)
     except:
+        print("Failed to get cache!")
         return None
 
 class GeoJsonEndpoint(Resource):
@@ -278,11 +317,12 @@ class GeoJsonEndpoint(Resource):
         agg_mode = req_json['agg_mode']
         #normalize_by = req_json['normalize_by'] #default = None
         chart_by = req_json['chart_by']
+        chart_mode = req_json['chart_mode']
 
         ret = get_data(violation_descriptions, dows, start_time,
                        end_time, start_hour, end_hour, wards,
                        dept_categories, ticket_queues, 
-                       include_cbd, agg_mode, chart_by)
+                       include_cbd, agg_mode, chart_by, chart_mode)
 
         return json.dumps(ret)
 
