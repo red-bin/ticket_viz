@@ -2,62 +2,83 @@
 
 import csv
 import json
-import pandas
+import pandas as pd
 
 from hashlib import md5
 
-import pickle
+from datetime import datetime, timedelta
 
-from datetime import datetime
 from os import stat
 
 from flask import Flask, request
 from flask_restful  import Resource, Api
 
-import viz_config
-
-from dropdown_opts import violation_opts
+import viz_config as conf
 
 column_types = {
-    'grid_id':int,
-    'violation_description':int,
-    'dow':int,
-    'year':int,
-    'hour':int,
-    'ward':str,
-    'department_category':str,
-    'ticket_queue':str,
+    'grid_id':'uint16',
+    'violation_description':'uint8',
+    'dow':'uint16',
+    'year':'uint16',
+    'hour':'uint8',
+    'ward':'uint8',
+    'department_category':'uint8',
+    'ticket_queue':'uint8',
     'is_business_district':bool,
-    'current_amount_due':float,
-    'total_payments':float,
-    'penalty':float
+    'current_amount_due':'int16',
+    'total_payments':'int16',
+    'penalty':'int16',
+    'fine_level1_amount': 'int16',
+    'hearing_disoposition':'uint8',
+    'week_idx': 'uint16',
+    'day_idx': 'uint16',
+    'month_idx': 'uint32',
 }
 
 
-datas = pandas.read_csv(viz_config.tickets_csv, dtype=column_types, 
-    parse_dates=['issue_date'], infer_datetime_format=True)
+print('Loading ', conf.tickets_csv)
+datas = pd.read_csv(conf.tickets_csv, dtype=column_types)
 
-pop_ratios = {}
-with open(viz_config.census_csv,'r') as fh:
-    reader = csv.DictReader(fh)
+max_week_idx = max(datas.week_idx)
+max_day_idx = max(datas.day_idx)
 
-    for line in reader:
-        grid_id = int(line['ID'])
-        black_pop = float(line['BLACK_OR_AFRICAN_AMERICAN'])
-        total_pop = float(line['TOTAL_POPULATION'])
+print(max_week_idx, max_day_idx)
 
-        if total_pop == 0:
-            pop_ratios[grid_id] = 0
-            continue
+date_format = '%Y-%m-%d'
+data_beginning = datetime.strptime('1995-12-31', date_format)
 
-        ratio = black_pop / total_pop 
+cached_week_strs = {}
+cached_day_strs = {}
 
-        pop_ratios[grid_id] = ratio
+for week_idx in range(0, max_week_idx+1):
+    time_dt = data_beginning + timedelta(days=week_idx*7)
+    time_str =  time_dt.strftime(date_format)
+    cached_week_strs[week_idx] = time_str
 
-with open(viz_config.empty_grid_geojson, 'r') as fh:
+for day_idx in range(0, max_day_idx+1):
+    time_dt = data_beginning + timedelta(days=day_idx)
+    time_str = time_dt.strftime(date_format)
+    cached_day_strs[day_idx] = time_str
+
+cached_opts = {}
+for selector in conf.selectors:
+    name = selector['column_name']
+
+    with open('{}/{}.{}.txt'.format(conf.dropdown_dir, name, conf.environment), 'r') as fh:
+        cached_opts[name] = [i.rstrip() for i in fh.readlines()]
+
+with open(conf.empty_grid_geojson, 'r') as fh:
     empty_grid_json = json.load(fh)
 
-test_gridvals = {}
+def mem_usage(pandas_obj):
+    if isinstance(pandas_obj,pd.DataFrame):
+        usage_b = pandas_obj.memory_usage(deep=True).sum()
+    else: # we assume if not a df it's a series
+        usage_b = pandas_obj.memory_usage(deep=True)
+    usage_mb = usage_b / 1024 ** 2 # convert bytes to megabytes
+    return "{:03.2f} MB".format(usage_mb)
+
+print(mem_usage(datas))
 
 def geojson_from_df(df):
     grid_vals_dict = df.to_dict()
@@ -78,7 +99,7 @@ def geojson_from_df(df):
             if data_val <= 0.00000000:
                 continue
 
-            feature['properties']['data_val'] = int(data_val)
+            feature['properties']['data_val'] = data_val
         else:
             continue
 
@@ -106,45 +127,23 @@ def geojson_from_df(df):
 
     return ret_geojson
 
-def timeseries_from_df(df, agg_mode, field_by, chart_mode, hist_size=50):
+def timeseries_from_df(df, agg_mode, aggreg_by, chart_mode, resolution_mode):
+    print('timeseries info:', agg_mode, aggreg_by, chart_mode, resolution_mode)
     key_data = {}
     cumm_dict = {}
 
-    if chart_mode == 'histogram':
+
+    for time, chunk_df in df.groupby(resolution_mode): 
         if agg_mode == 'count':
-            hist_data = df.groupby(field_by).current_amount_due.size()
-        if agg_mode == 'due':
-            hist_data = df.groupby(field_by).current_amount_due.sum()
-        if agg_mode == 'paid':
-            hist_data = df.groupby(field_by).total_payments.sum()
-        if agg_mode == 'penalties':
-            hist_data = df.groupby(field_by).penalty.sum()
-
-        max_val = hist_data.max()
-        #hacky way to make histogram..
-        hist_data = list(dict(hist_data).items())
-        hist_data.sort(key=lambda x: x[1], reverse=True)
-
-        xs = []
-        ys = []
-        for x, y in hist_data[:hist_size]:
-            if (y / max_val) <= .02:
-                continue
-
-            xs.append(x)
-            ys.append(float(y))
-
-        return {'xs': xs, 'ys': ys}
-
-    for time, chunk_df in df.groupby('issue_date'): 
-        if agg_mode == 'count':
-            chunk_data = chunk_df.groupby(field_by).current_amount_due.size()
+            chunk_data = chunk_df.groupby(aggreg_by).is_business_district.size()
         elif agg_mode == 'due':
-            chunk_data = chunk_df.groupby(field_by).current_amount_due.sum()
+            chunk_data = chunk_df.groupby(aggreg_by).current_amount_due.sum()
         elif agg_mode == 'paid':
-            chunk_data = chunk_df.groupby(field_by).total_payments.sum()
+            chunk_data = chunk_df.groupby(aggreg_by).total_payments.sum()
         elif agg_mode == 'penalties':
-            chunk_data = chunk_df.groupby(field_by).penalty.sum()
+            chunk_data = chunk_df.groupby(aggreg_by).penalty.sum()
+        elif agg_mode == 'fine_level1_amount':
+            chunk_data = chunk_df.groupby(aggreg_by).penalty.sum()
 
         for key, val in dict(chunk_data).items():
             if key not in key_data.keys():
@@ -153,8 +152,22 @@ def timeseries_from_df(df, agg_mode, field_by, chart_mode, hist_size=50):
             if chart_mode == 'cummulative' and key_data[key]['xs']:
                 val = val + key_data[key]['ys'][-1]
 
-            key_data[key]['xs'].append(time.strftime('%Y-%m-%d'))
-            key_data[key]['ys'].append(float(val))
+            if resolution_mode == 'week_idx':
+                time_str = cached_week_strs[time]
+
+            elif resolution_mode == 'day_idx':
+                time_str = cached_day_strs[time]
+
+            elif resolution_mode == 'year':
+                time_str = '{}-01-01'.format(time)
+
+            elif resolution_mode == 'month_idx':
+                month = str(time)[-2:]
+                year = str(time)[:4]
+                time_str = '{}-{}-01'.format(year, month)
+
+            key_data[key]['xs'].append(time_str) ##FIX THIS
+            key_data[key]['ys'].append(int(val))
 
     ret_dict = {'keys':[], 'xs':[], 'ys':[]}
     for key, vals in key_data.items():
@@ -162,53 +175,22 @@ def timeseries_from_df(df, agg_mode, field_by, chart_mode, hist_size=50):
         ret_dict['xs'].append(vals['xs'])
         ret_dict['ys'].append(vals['ys'])
 
-    print(field_by)
-    if field_by == 'violation_description':
-        new_keys = []
-        for k in ret_dict['keys']:
-            new_keys.append(violation_opts[k])
-        ret_dict['keys'] = new_keys
+    new_keys = []
+    for k in ret_dict['keys']:
+        new_keys.append(cached_opts[aggreg_by][k])
+    ret_dict['keys'] = new_keys
 
     return ret_dict
 
-def normalize_geojson_data(df, normalize_by):
-    print("normalize by:", normalize_by)
-    total = df.sum()
-    data_dict = dict(df)
-
-    vals_total = 0
-    for grid_id, data_val in data_dict.items():
-        ratio = data_val / total
-
-        if normalize_by == 'total_population':
-            normalize_ratio = pop_ratios[grid_id]
-        else:
-            normalize_ratio = 1
-
-        normalized_ratio = normalize_ratio * ratio * 10000
-        vals_total += normalized_ratio
-        data_dict[grid_id] = normalized_ratio
-
-    ret_df = pandas.DataFrame()
-    
-    ids = list(data_dict.keys())
-    vals = list(data_dict.values())
-
-    ret_df = pandas.Series(vals, index=ids)
-        
-    return ret_df
-
-test_datas = None
-
-def get_data(violation_descriptions, dows, start_time, end_time, 
-        start_hour, end_hour, wards, dept_categories, ticket_queues,
-        include_cbd, agg_mode, chart_by, chart_mode):
-
+def get_data(agg_mode='count', start_time=None, end_time=None, aggreg_by=None, chart_mode=None, resolution_mode=None, **kwargs):
     #hash of dict = cache file location
     md5obj = md5()
-    md5obj.update(str([violation_descriptions, dows, start_time,
-        end_time, start_hour, end_hour, wards, dept_categories,
-        ticket_queues, include_cbd, agg_mode, chart_by, chart_mode]).encode('utf-8'))
+
+    md5_kwargs = [kwargs[k] for k in sorted(kwargs.keys())]
+
+    md5_input = '|'.join(map(str, (start_time, end_time, agg_mode, aggreg_by, chart_mode, resolution_mode, md5_kwargs)))
+
+    md5obj.update(md5_input.encode('utf-8'))
 
     request_hash = md5obj.hexdigest()
 
@@ -221,37 +203,45 @@ def get_data(violation_descriptions, dows, start_time, end_time,
 
     new_datas = datas.copy()
 
-    if 'All' not in violation_descriptions:
-        print(violation_descriptions)
-        #violation_descriptions = list(map(str.upper, violation_descriptions))
-        new_datas = new_datas[new_datas.violation_description.isin(violation_descriptions)]
+    #filter selection based on selector inputs. 0 = 'All' = skip
+    for selector_name, selector_vals in kwargs['selector_vals']:
+        if 0 in selector_vals:
+            continue
 
-    if 'All' not in dows:
-        new_datas = new_datas[new_datas.dow.isin(dows)]
-    
-    if start_hour != 0:
-        new_datas = new_datas[new_datas.hour >= start_hour]
-    
-    if end_hour != 23:
-        new_datas = new_datas[new_datas.hour <= end_hour]
-    
-    if 'All' not in wards:
-        new_datas = new_datas[new_datas.ward.isin(wards)]
-    
-    if 'All' not in dept_categories:
-        new_datas = new_datas[new_datas.department_category.isin(dept_categories)]
-    
-    if 'All' not in ticket_queues:
-        new_datas = new_datas[new_datas.ticket_queue.isin(ticket_queues)]
-    
-    if not include_cbd:
+        new_datas = new_datas[new_datas[selector_name].isin(selector_vals)]
+
+    if not kwargs['include_cbd']:
         new_datas = new_datas[new_datas.is_business_district != True]
-   
-    if start_time != datetime(2013, 1, 1):
-        new_datas = new_datas[new_datas.issue_date >= start_time]
+    if kwargs['start_hour'] != 0:
+        new_datas = new_datas[new_datas.hour >= start_hour]
+    if kwargs['end_hour'] != 24:
+        new_datas = new_datas[new_datas.hour <= end_hour]
+  
+    date_format = '%Y-%m-%d'
+    data_beginning = datetime.strptime('1995-12-31', date_format) 
 
-    if end_time != datetime(2018,5,14):
-        new_datas = new_datas[new_datas.issue_date <= end_time]
+    day_start_idx = (start_time - data_beginning).days
+    day_end_idx = (end_time - data_beginning).days
+
+    week_start_idx = int(day_start_idx / 7)
+    week_end_idx = int(day_end_idx / 7)
+
+    conf_start_date = datetime.strptime(conf.start_date, '%Y-%m-%d')
+    conf_end_date = datetime.strptime(conf.end_date, '%Y-%m-%d')
+
+    if start_time.year > conf_start_date.year:
+        new_datas = new_datas[new_datas.year >= start_time.year]
+
+    if end_time.year < conf_end_date.year:
+        new_datas = new_datas[new_datas.year <= start_time.year]
+
+    if start_time > conf_start_date:
+        new_datas = new_datas[new_datas.day_idx >= day_start_idx]
+        new_datas = new_datas[new_datas.week_idx >= week_start_idx]
+
+    if end_time < conf_end_date:
+        new_datas = new_datas[new_datas.day_idx <= day_end_idx]
+        new_datas = new_datas[new_datas.week_idx <= week_end_idx]
 
     #agg_mode check must come last
     if agg_mode == 'count': 
@@ -266,15 +256,17 @@ def get_data(violation_descriptions, dows, start_time, end_time,
     elif agg_mode == 'penalties':
         pre_geojson_df = new_datas.groupby('grid_id').penalty.sum()
 
-    #if normalize_by:
-    #    pre_geojson_df = normalize_geojson_data(pre_geojson_df, normalize_by)
+    elif agg_mode == 'fine_level1_amount':
+        pre_geojson_df = new_datas.groupby('grid_id').fine_level1_amount.sum()
 
-    timeseries_ret = timeseries_from_df(new_datas, agg_mode, field_by=chart_by, chart_mode=chart_mode)
+    timeseries_ret = timeseries_from_df(new_datas, agg_mode, aggreg_by=aggreg_by, chart_mode=chart_mode, resolution_mode=resolution_mode)
     geojson_ret = geojson_from_df(pre_geojson_df)
+
+    print('ts_len: ', len(timeseries_ret))
 
     ret = {'geojson': geojson_ret, 'timeseries_data': timeseries_ret}
 
-    if viz_config.environment == "prod":
+    if conf.environment in ['prod', 'superprod']:
         cache_results(ret, request_hash)
 
     return ret
@@ -282,7 +274,7 @@ def get_data(violation_descriptions, dows, start_time, end_time,
 app = Flask(__name__)
 api = Api(app)
 
-def cache_results(geojson_data, filename, path=viz_config.cache_dir):
+def cache_results(geojson_data, filename, path=conf.cache_dir):
     try:
         with open('{}/{}'.format(path, filename), 'w') as fh:
             json.dump(geojson_data, fh)
@@ -292,7 +284,7 @@ def cache_results(geojson_data, filename, path=viz_config.cache_dir):
 
 def get_cached_geojson(filename):
     try:
-        with open('{}/{}'.format(viz_config.cache_dir, filename)) as fh:
+        with open('{}/{}'.format(conf.cache_dir, filename)) as fh:
             return json.load(fh)
     except:
         print("Failed to get cache!")
@@ -303,33 +295,17 @@ class GeoJsonEndpoint(Resource):
         print(request.form['data'])
 
         req_json = json.loads(request.form['data'])
+        req_json['end_time'] = datetime.strptime(req_json['end_time'], '%Y-%m-%d')
+        req_json['start_time'] = datetime.strptime(req_json['start_time'], '%Y-%m-%d')
 
-        violation_descriptions = req_json['violation_descriptions']
-        dows = req_json['dows']
-        start_time = datetime.strptime(req_json['start_time'], '%Y-%m-%d')
-        end_time = datetime.strptime(req_json['end_time'], '%Y-%m-%d')
-        start_hour = req_json['start_hour']
-        end_hour = req_json['end_hour']
-        wards = req_json['wards']
-        dept_categories = req_json['dept_categories']
-        ticket_queues = req_json['ticket_queues']
-        include_cbd = req_json['include_cbd']
-        agg_mode = req_json['agg_mode']
-        #normalize_by = req_json['normalize_by'] #default = None
-        chart_by = req_json['chart_by']
-        chart_mode = req_json['chart_mode']
-
-        ret = get_data(violation_descriptions, dows, start_time,
-                       end_time, start_hour, end_hour, wards,
-                       dept_categories, ticket_queues, 
-                       include_cbd, agg_mode, chart_by, chart_mode)
+        ret = get_data(**req_json)
 
         return json.dumps(ret)
 
 api.add_resource(GeoJsonEndpoint, '/')
 
 if __name__ == '__main__':
-    if viz_config.environment in ['dev','superprod']: 
+    if conf.environment in ['dev']: 
         app.run(debug=True)
-    elif viz_config.environment in 'prod': 
+    elif conf.environment in ['prod', 'superprod']: 
         app.run(debug=False)

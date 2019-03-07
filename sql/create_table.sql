@@ -61,6 +61,9 @@ UPDATE tickets SET department_category = u.department_category
 FROM units u 
 WHERE u.unit = tickets.unit ;
 
-update tickets set hour = extract('hour' from issue_date) ;
-update tickets set dow = extract('dow' from issue_date) ;
-update tickets set dom = extract('day' from issue_date) ;
+UPDATE tickets SET hour = EXTRACT('hour' FROM issue_date) ;
+UPDATE tickets SET dow = EXTRACT('dow' FROM issue_date) ;
+UPDATE tickets SET dom = EXTRACT('day' FROM issue_date) ;
+UPDATE tickets SET penalty = 0 WHERE penalty IS NULL ;
+UPDATE tickets SET hearing_disposition = 'No Hearing' WHERE hearing_disposition NOT IN ('Not Liable', 'Liable') ;
+UPDATE tickets SET violation_description = initcap(violation_description) ;

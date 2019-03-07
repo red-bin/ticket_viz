@@ -1,8 +1,9 @@
-#!/usr/bin/python3
+#!/USr/bin/python3
 
 from os.path import dirname, join
 from datetime import date
 import requests
+from pprint import pprint
 
 from datetime import datetime
 from datetime import timedelta
@@ -15,6 +16,8 @@ import json
 import seaborn as sns
 
 from bokeh.models.annotations import Title
+
+import viz_config as conf
 
 from bokeh.io import show, output_notebook, output_file, curdoc
 from bokeh.models import (
@@ -39,7 +42,6 @@ from bokeh.models import (
     CustomJS
 )
 from bokeh.tile_providers import CARTODBPOSITRON as tileset
-#from bokeh.tile_providers import STAMEN_TONER as tileset
 
 from time import sleep
 import geojson
@@ -52,89 +54,77 @@ from bokeh.models.widgets import Slider, Select, TextInput
 from bokeh.models.widgets import Button
 from bokeh.layouts import layout, widgetbox, column
 
-from dropdown_opts import violation_opts
+#from dropdown_opts import violation_opts
 
 from bokeh.transform import log_cmap, linear_cmap
 
-violation_opts = [i.title() for i in violation_opts]
+opts_fields = [
+    'violation_description',
+    'ward',
+    'ticket_queue',
+    'department_category',
+    'dow',
+    'hearing_disposition'
+] 
 
-def get_new_data():
-    weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
-    def request_data(min_date, max_date, violation_descriptions, dows,
-            min_hour, max_hour, wards, dept_categories, ticket_queues,
-            include_cbd, agg_mode, chart_by, chart_mode):
+#pulling results from create_cache.py
+selector_opts = {}
+for opt_field in opts_fields: 
+    fp = '{}/{}.{}.txt'.format(conf.dropdown_dir, opt_field, conf.environment)
+    with open(fp, 'r') as fh:
+        selector_opts[opt_field] =[i.rstrip() for i in fh.readlines()] 
+        pprint(selector_opts)
 
-        request_json = {
-            'violation_descriptions': violation_descriptions,
-            'dows': dows,
-            'start_time': min_date.strftime('%Y-%m-%d'),
-            'end_time': max_date.strftime('%Y-%m-%d'),
-            'start_hour': min_hour,
-            'end_hour': max_hour,
-            'wards': wards,
-            'dept_categories': dept_categories,
-            'ticket_queues': ticket_queues,
-            'include_cbd': include_cbd,
-            'agg_mode': agg_mode,
-            #'normalize_by': normalize_by,
-            'chart_by': chart_by,
-            'chart_mode': chart_mode,
-        }
+def selector_value(name):
+    for selector in selectors:
+        if selector.name == name:
+            return selector.value
 
-        data = {'data': json.dumps(request_json)}
-        ret = requests.get('http://localhost:5000/', data=data)
+    print("No selector by that name!")
+    return None
 
-        return ret.json()
-
+def controls_vals():
     min_date, max_date = date_selector.value_as_datetime
     min_hour, max_hour = hours_selector.value
 
-    if 'All' in dow_selector.value:
-        dows = ['All']
-    else:
-        dows = [weekdays.index(i) for i in dow_selector.value]
-
     include_cbd = False if central_bus_toggle.active else True
 
-    agg_modes = ['count', 'due', 'paid', 'penalties']
+    agg_modes = ['count', 'due', 'paid', 'penalties', 'fine_level1_amount']
     agg_mode = agg_modes[select_type_radios.active]
 
-    #if select_normalize_radios.active == 0:
-    #    normalize_by = None
-    #elif select_normalize_radios.active == 1:
-    #    normalize_by = 'total_population'
-    #elif select_normalize_radios.active == 2:
-    #    normalize_by = 'percent'
-
-    chart_bys = ['violation_description', 'department_category', 'ward']
-    chart_by = chart_bys[select_chart_radios.active]
+    aggregs_by = [s['column_name'] for s in conf.selectors]
+    aggreg_by = aggregs_by[select_chart_radios.active]
 
     chart_modes = ['count', 'cummulative', 'histogram']
     chart_mode = chart_modes[chart_rbg_radios.active]
 
-    violation_descriptions = []
-    for viol in tuple(violation_selector.value):
-        if viol == 'All': #remove from 
-            violation_descriptions.append('All')
-        else:
-            violation_descriptions.append(violation_opts.index(viol))
+    resolution_modes = ['year', 'month_idx', 'week_idx', 'day_idx']
+    resolution_mode = resolution_modes[chart_res_radios.active]
 
-    resp_str = request_data(min_date=min_date, 
-                     max_date=max_date, 
-                     violation_descriptions=violation_descriptions,
-                     dows=tuple(dows),
-                     min_hour=round(min_hour),
-                     max_hour=round(max_hour),
-                     wards=tuple(wards_selector.value),
-                     dept_categories=tuple(dpt_categ_selector.value),
-                     ticket_queues=tuple(queue_selector.value),
-                     include_cbd=include_cbd,
-                     agg_mode=agg_mode,
-                     #normalize_by=normalize_by,
-                     chart_by=chart_by,
-                     chart_mode=chart_mode)
+    ret_vals = {
+        'start_time': min_date.strftime('%Y-%m-%d'),
+        'end_time': max_date.strftime('%Y-%m-%d'),
+        'start_hour': min_hour,
+        'end_hour': max_hour,
+        'include_cbd': include_cbd,
+        'agg_mode': agg_mode,
+        'aggreg_by': aggreg_by,
+        'chart_mode': chart_mode,
+        'resolution_mode': resolution_mode,
+        'selector_vals': []
+    }
+                 
+    for selector in selectors:
+        val_indexes = [selector.options.index(v) for v in selector.value]
+        ret_vals['selector_vals'].append([selector.name, val_indexes])
 
-    ret = json.loads(resp_str)
+    return ret_vals
+
+def get_new_data():
+    data = {'data': json.dumps(controls_vals())}
+    resp = requests.get('http://localhost:5000/', data=data).json()
+    ret = json.loads(resp)
+
     return ret['geojson'], ret['timeseries_data']
 
 def clear_chart():
@@ -157,20 +147,22 @@ def update_chart(timeseries_data):
         #chart.x_scale = None
 
         datetime_xs = []
+
+        #RE-ENABLE ME
         for raw_xs in timeseries_data['xs']:
             datetime_xs.append([datetime.strptime(x, '%Y-%m-%d') for x in raw_xs])
     
         timeseries_data['xs_datetime'] = datetime_xs
+#        timeseries_data['xs_datetime'] = timeseries_data['xs']
 
         timeseries_data['line_color'] = chart_palette
     
     
-    #    for key, vals in timeseries_data.items():
         line_opts = {
             'xs': 'xs_datetime',
             'ys': 'ys',
             'line_width': 1.5,
-            'line_alpha': .7,
+            'line_alpha': .8,
             'line_color': 'line_color',
             'source': ColumnDataSource(timeseries_data),
         }
@@ -179,9 +171,7 @@ def update_chart(timeseries_data):
         inbetween = [min_date + timedelta(days=x) for x in range(0, (max_date - min_date).days)]
         inbetween_str = [datetime.strftime(d, '%Y-%m-%d') for d in inbetween] 
 
-        #del chart.x_range.factors 
         global chart_lines
-        #chart_lines = chart.multi_line(**line_opts)
         chart_lines = chart.multi_line(**line_opts)
     
         chart_tooltips=[
@@ -190,13 +180,24 @@ def update_chart(timeseries_data):
             ("name", "@keys"),
         ]
 
-        chart_bys = ['Violation Name', 'Department Class', 'Ward no.']
-        chart_by = chart_bys[select_chart_radios.active]
+        chart_labels = [s['title'] for s in conf.selectors]
+        chart_by = chart_labels[select_chart_radios.active]
  
-        chart_modes = ['Daily Count', 'Cummulative']
-        chart_mode = chart_modes[chart_rbg_radios.active]
+        chart_modes = ["Yearly", "Monthly", "Weekly", "Daily"] 
+        chart_mode = chart_modes[chart_res_radios.active]
 
-        chart_title.text = '{} of tickets by {}'.format(chart_mode, chart_by)
+        agg_modes = ['Count', 'Due', 'Paid', 'Penalties', 'Initial Amnt.']
+        agg_mode = agg_modes[select_type_radios.active]
+
+        if agg_mode == 'Count':
+            of_or_from = 'Of'
+
+        else:
+            of_or_from = 'From'
+
+        title_vals = [chart_mode, agg_mode, of_or_from, chart_by]
+
+        chart_title.text = '{} {} {} Tickets By {}'.format(*title_vals)
 
         for tool in chart.tools:
             if tool.name == 'chart_hovertool':
@@ -221,7 +222,8 @@ def update():
     geo_source.geojson = json.dumps(geojson_data)
 
     ##update color range
-    data_vals = [geojson_data['features'][i]['properties']['data_val'] for i in range(len(geojson_data['features']))]
+    feat_range = range(len(geojson_data['features']))
+    data_vals = [geojson_data['features'][i]['properties']['data_val'] for i in feat_range]
 
     tmp_data_vals = []
     for val in data_vals:
@@ -255,14 +257,17 @@ def update():
     if select_type_radios.active == 0:
         hover_tool.tooltips = [("Ticket Count", "@data_val")]
 
-    if select_type_radios.active == 1:
+    elif select_type_radios.active == 1:
         hover_tool.tooltips = [("$ Due", "@data_val")]
 
-    if select_type_radios.active == 2:
+    elif select_type_radios.active == 2:
         hover_tool.tooltips = [("$ Paid", "@data_val")]
         
-    if select_type_radios.active == 3:
+    elif select_type_radios.active == 3:
         hover_tool.tooltips = [("$ in Penalties", "@data_val")]
+
+    elif select_type_radios.active == 4:
+        hover_tool.tooltips = [("$ in Initial Amounts", "@data_val")]
         
     print("done updating - took {} seconds".format(time_delta))
     update_button.label = "Update"
@@ -271,26 +276,37 @@ def update():
 with open('/opt/ticket_viz/data/default_geojson','r') as f: 
     geo_source = GeoJSONDataSource(geojson=f.read())
 
-date_selector = DateRangeSlider(title='Date', start=date(2013,1,1), 
-    value=(date(2013,1,1), date(2018,5,14)), end=date(2018,5,14), 
+start_date = date(*map(int, conf.start_date.split('-')))
+end_date = date(*map(int, conf.end_date.split('-')))
+date_selector = DateRangeSlider(title='Date', start=start_date, 
+    value=(start_date, end_date), end=end_date, 
     step=1, callback_policy="mouseup")
 
 hours_selector = RangeSlider(title="Hours Range", start=0, end=23, value=(0,24))
 
-violation_selector = MultiSelect(title='Violation:', value=['All'], options=violation_opts, size=4)
-#violation_selector.width=100
+selectors = []
+for selector_details in conf.selectors:
+    column_name = selector_details['column_name']
+    title = selector_details['title']
 
-dpt_categories = ['All', 'DOF', 'CTA', 'Speed', 'Red light', 'LAZ', 
-                 'CPD', 'Chicago Parking Meter', 'Miscellaneous/Other', 
-                 'Streets and San', 'SERCO']
+    opts = selector_opts[column_name]
 
-dpt_categ_selector = MultiSelect(title='Department Category:', value=['All'], options=dpt_categories)
+    if 'index_map' in selector_details:
+        new_opts = [opts[0]] #include "All"
+        for opt in opts[1:]:
+            opt_name = ' '.join(opt.split(' ')[:-1])
+            opt_count = opt.split(' ')[-1]
 
-weekdays = ['All', 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
-dow_selector = MultiSelect(title='Weekdays:', value=['All'], options=weekdays)
+            mapped_name = selector_details['index_map'][int(opt_name)]
+            opt_text = '{} {}'.format(mapped_name, opt_count)
+            new_opts.append(opt_text)
 
-ticket_queues = ['All', 'Hearing Req', 'Notice', 'Dismissed', 'Bankruptcy', 'Paid', 'Define', 'Court']
-queue_selector = MultiSelect(title='Ticket Queue:', value=['All'], options=ticket_queues)
+        opts = new_opts
+
+    title_text = '{}: '.format(title)
+
+    selector = MultiSelect(title=title_text, value=[opts[0]], options=opts, size=4, name=column_name)
+    selectors.append(selector)
 
 source_json = geojson.loads(geo_source.geojson)
 data_vals = [source_json[i]['properties']['data_val'] for i in range(len(source_json['features']))]
@@ -306,7 +322,6 @@ geomap_tooltips = [("Ticket Count", "@data_val")]
 geomap_opts = {
     'background_fill_color': None, 
     'plot_width': 800,
-    #'plot_width': 600,
     'tooltips': geomap_tooltips, 
     'tools': '',
     'x_axis_type': "mercator",
@@ -349,32 +364,27 @@ geomap.patches(**patches_opts)
 
 ##create chart
 
-#start = datetime.datetime.strptime("21-06-2014", "%d-%m-%Y") 
-#end = datetime.datetime.strptime("07-07-2014", "%d-%m-%Y")
-
 chart_opts = {
-    'plot_width':800,
-    'plot_height':300,
+    'plot_width':840,
+    'plot_height':350,
     'tools':'',
     'x_axis_type': 'datetime',
     'output_backend': 'webgl',
     'title': '',
-    #'y_axis_type': "log"
 }
 
 chart = figure(**chart_opts)
 chart_title = Title()
 chart_title.text = "starting title"
 chart.title = chart_title
-#chart_wheel_zoom = WheelZoomTool()
-#chart_pan_tool = PanTool()
-#chart_reset_tool = ResetTool()
 
-#chart.add_tools(chart_reset_tool)
-#chart.toolbar.active_scroll = chart_wheel_zoom
+chart_wheel_zoom = WheelZoomTool()
+chart_pan_tool = PanTool()
+
+chart.add_tools(chart_wheel_zoom, chart_pan_tool)
+chart.toolbar.active_scroll = chart_wheel_zoom
 
 chart.xaxis.visible = False
-#chart.xaxis.major_label_orientation = pi/4
 chart_lines = None
 chart_hover = None
 
@@ -392,23 +402,20 @@ central_bus_toggle = Toggle(label="Ignore Central Business District", active=Fal
 
 select_rbg_div = Div(text="Display by: ")
 select_type_radios = RadioButtonGroup(
-        labels=["Count", "Due", "Paid", "Penalties"], active=0)
+        labels=["Count", "Due", "Paid", "Penalties", "Initial Amnt"], active=0)
+
+chart_res_div = Div(text="Chart resolution: ")
+chart_res_labels = ["Yearly", "Monthly", "Weekly", "Daily (Slow)"]
+chart_res_radios = RadioButtonGroup(labels=chart_res_labels, active=1)
 
 chart_rbg_div = Div(text="Chart type: ")
-chart_rbg_labels = ["Per Day", "Cummulative"]
+chart_rbg_labels = ["Non-Cummulative", "Cummulative"]
 chart_rbg_radios = RadioButtonGroup(labels=chart_rbg_labels, active=0)
 
-#implement in the future
-#normalize_rbg_div = Div(text="Normalize By: ")
-#select_normalize_radios = RadioButtonGroup(
-#        labels=["None", "Population", "Percent"], active=0)
-
 chart_rbg_div = Div(text="Chart Lines By: ")
+chart_labels = [s['title'] for s in conf.selectors]
 select_chart_radios = RadioButtonGroup(
-        labels=["Violation", "Department", "Ward"], active=0)
-
-wards_opts = ['All'] + list(map(str, range(1,51)))
-wards_selector = MultiSelect(title="Ward #:", value=['All'], options=wards_opts, size=4)
+        labels=chart_labels, active=0)
 
 ticker = LogTicker(desired_num_ticks=8)
 
@@ -416,12 +423,18 @@ color_bar = ColorBar(color_mapper=color_mapper, ticker=ticker, location=(0,0))
 geomap.add_layout(color_bar, 'right')
 geomap.right[0].formatter.use_scientific = False
 
-controls = [date_selector, hours_selector, dow_selector, violation_selector, wards_selector,
-            dpt_categ_selector, queue_selector, select_rbg_div, select_type_radios, 
-            central_bus_toggle, chart_rbg_div, 
-            select_chart_radios, chart_rbg_radios, update_button]
+datetime_selectors = [date_selector, hours_selector]
+radios_and_divs = [
+    select_rbg_div, select_type_radios, chart_rbg_div, select_chart_radios,
+    chart_rbg_radios, chart_res_div, chart_res_radios
+]
 
-inputs = widgetbox(*controls, sizing_mode='fixed', width=400)
+controls = [
+    *datetime_selectors, *selectors, *radios_and_divs, 
+    central_bus_toggle, update_button
+]
+            
+inputs = widgetbox(*controls, sizing_mode='fixed', width=420)
 
 col2 = column(geomap, chart)
 col1 = column(inputs)
