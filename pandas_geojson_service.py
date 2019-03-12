@@ -50,6 +50,10 @@ data_beginning = datetime.strptime('1995-12-31', date_format)
 cached_week_strs = {}
 cached_day_strs = {}
 
+cached_index_map = dict([ (s['column_name'],s['index_map']) 
+                           for s in conf.selectors if 'index_map' in s ])
+
+print(cached_index_map)
 for week_idx in range(0, max_week_idx+1):
     time_dt = data_beginning + timedelta(days=week_idx*7)
     time_str =  time_dt.strftime(date_format)
@@ -175,9 +179,17 @@ def timeseries_from_df(df, agg_mode, aggreg_by, chart_mode, resolution_mode):
         ret_dict['xs'].append(vals['xs'])
         ret_dict['ys'].append(vals['ys'])
 
+    key_is_index_mapped = True if aggreg_by in cached_index_map.keys() else False
+
     new_keys = []
-    for k in ret_dict['keys']:
-        new_keys.append(cached_opts[aggreg_by][k])
+    for key in ret_dict['keys']:
+        if key_is_index_mapped:
+            new_key = cached_index_map[aggreg_by][key-1]
+        else:
+            new_key = ' '.join(cached_opts[aggreg_by][key].split(' ')[:-1])
+
+        new_keys.append(new_key)
+
     ret_dict['keys'] = new_keys
 
     return ret_dict

@@ -1,62 +1,35 @@
-#!/USr/bin/python3
+#!/usr/bin/python3
 
-from os.path import dirname, join
-from datetime import date
-import requests
-from pprint import pprint
-
-from datetime import datetime
-from datetime import timedelta
-
-from math import pi
-
-import csv
+from datetime import datetime, date
+import geojson
 import json
-
+import requests
 import seaborn as sns
 
 from bokeh.models.annotations import Title
-
-import viz_config as conf
-
-from bokeh.io import show, output_notebook, output_file, curdoc
+from bokeh.io import curdoc
 from bokeh.models import (
-    FactorRange,
     GeoJSONDataSource,
     HoverTool,
-    LinearColorMapper,
     LogColorMapper,
     Div,
     DateRangeSlider,
     RangeSlider,
-    Select,
     MultiSelect,
     RadioButtonGroup,
     ColorBar,
-    BasicTicker,
     Toggle,
     LogTicker,
-    WMTSTileSource,
-    CategoricalScale,
     ColumnDataSource,
-    CustomJS
 )
+
+from bokeh.layouts import layout, widgetbox, column
+from bokeh.models.tools import WheelZoomTool, PanTool
+from bokeh.models.widgets import Button
+from bokeh.plotting import figure
 from bokeh.tile_providers import CARTODBPOSITRON as tileset
 
-from time import sleep
-import geojson
-
-from bokeh.models.tools import WheelZoomTool, PanTool, ResetTool
-
-from bokeh.plotting import figure
-from bokeh.palettes import Category20
-from bokeh.models.widgets import Slider, Select, TextInput
-from bokeh.models.widgets import Button
-from bokeh.layouts import layout, widgetbox, column
-
-#from dropdown_opts import violation_opts
-
-from bokeh.transform import log_cmap, linear_cmap
+import viz_config as conf
 
 opts_fields = [
     'violation_description',
@@ -65,15 +38,14 @@ opts_fields = [
     'department_category',
     'dow',
     'hearing_disposition'
-] 
+]
 
 #pulling results from create_cache.py
 selector_opts = {}
-for opt_field in opts_fields: 
+for opt_field in opts_fields:
     fp = '{}/{}.{}.txt'.format(conf.dropdown_dir, opt_field, conf.environment)
     with open(fp, 'r') as fh:
-        selector_opts[opt_field] =[i.rstrip() for i in fh.readlines()] 
-        pprint(selector_opts)
+        selector_opts[opt_field] = [i.rstrip() for i in fh.readlines()]
 
 def selector_value(name):
     for selector in selectors:
@@ -84,8 +56,10 @@ def selector_value(name):
     return None
 
 def controls_vals():
-    min_date, max_date = date_selector.value_as_datetime
-    min_hour, max_hour = hours_selector.value
+    min_date = date_selector.value_as_datetime[0]
+    max_date = date_selector.value_as_datetime[1]
+    min_hour = hours_selector.value[0]
+    max_hour = hours_selector.value[1]
 
     include_cbd = False if central_bus_toggle.active else True
 
@@ -113,7 +87,7 @@ def controls_vals():
         'resolution_mode': resolution_mode,
         'selector_vals': []
     }
-                 
+
     for selector in selectors:
         val_indexes = [selector.options.index(v) for v in selector.value]
         ret_vals['selector_vals'].append([selector.name, val_indexes])
@@ -128,7 +102,7 @@ def get_new_data():
     return ret['geojson'], ret['timeseries_data']
 
 def clear_chart():
-    global chart_lines
+    """Removes rendered lines from main chart"""
     if chart_lines:
         chart.renderers.remove(chart_lines)
 
@@ -144,20 +118,14 @@ def update_chart(timeseries_data):
 
     #if time-based, convert x axis to datetime
     if chart_mode in ['count', 'cummulative']:
-        #chart.x_scale = None
-
         datetime_xs = []
-
-        #RE-ENABLE ME
         for raw_xs in timeseries_data['xs']:
             datetime_xs.append([datetime.strptime(x, '%Y-%m-%d') for x in raw_xs])
-    
+
         timeseries_data['xs_datetime'] = datetime_xs
-#        timeseries_data['xs_datetime'] = timeseries_data['xs']
 
         timeseries_data['line_color'] = chart_palette
-    
-    
+
         line_opts = {
             'xs': 'xs_datetime',
             'ys': 'ys',
@@ -167,14 +135,10 @@ def update_chart(timeseries_data):
             'source': ColumnDataSource(timeseries_data),
         }
 
-        min_date, max_date = date_selector.value_as_datetime
-        inbetween = [min_date + timedelta(days=x) for x in range(0, (max_date - min_date).days)]
-        inbetween_str = [datetime.strftime(d, '%Y-%m-%d') for d in inbetween] 
-
         global chart_lines
         chart_lines = chart.multi_line(**line_opts)
-    
-        chart_tooltips=[
+
+        chart_tooltips = [
             ("value", "$y{int}"),
             ("Date", "$x{%F}"),
             ("name", "@keys"),
@@ -182,8 +146,8 @@ def update_chart(timeseries_data):
 
         chart_labels = [s['title'] for s in conf.selectors]
         chart_by = chart_labels[select_chart_radios.active]
- 
-        chart_modes = ["Yearly", "Monthly", "Weekly", "Daily"] 
+
+        chart_modes = ["Yearly", "Monthly", "Weekly", "Daily"]
         chart_mode = chart_modes[chart_res_radios.active]
 
         agg_modes = ['Count', 'Due', 'Paid', 'Penalties', 'Initial Amnt.']
@@ -203,10 +167,15 @@ def update_chart(timeseries_data):
             if tool.name == 'chart_hovertool':
                 del tool
 
-        chart_hovertool = HoverTool(tooltips=chart_tooltips, formatters={'$x': 'datetime'}, line_policy='nearest', mode='mouse', name='chart_hovertool')
+        hovertool_opts = dict(tooltips=chart_tooltips,
+                              formatters={'$x': 'datetime'},
+                              line_policy='nearest',
+                              mode='mouse',
+                              name='chart_hovertool')
+
+        chart_hovertool = HoverTool(**hovertool_opts)
         chart.add_tools(chart_hovertool)
         chart.xaxis.visible = True
-
 
 def update():
     start_time = datetime.now()
@@ -253,7 +222,7 @@ def update():
 
     #update hover tool dialogues
     hover_tool = [t for t in geomap.tools if t.ref['type'] == 'HoverTool'][0]
-    
+
     if select_type_radios.active == 0:
         hover_tool.tooltips = [("Ticket Count", "@data_val")]
 
@@ -262,27 +231,29 @@ def update():
 
     elif select_type_radios.active == 2:
         hover_tool.tooltips = [("$ Paid", "@data_val")]
-        
+
     elif select_type_radios.active == 3:
         hover_tool.tooltips = [("$ in Penalties", "@data_val")]
 
     elif select_type_radios.active == 4:
         hover_tool.tooltips = [("$ in Initial Amounts", "@data_val")]
-        
+
     print("done updating - took {} seconds".format(time_delta))
     update_button.label = "Update"
     update_button.disabled = False
 
-with open('/opt/ticket_viz/data/default_geojson','r') as f: 
+with open('/opt/ticket_viz/data/default_geojson', 'r') as f:
     geo_source = GeoJSONDataSource(geojson=f.read())
 
 start_date = date(*map(int, conf.start_date.split('-')))
 end_date = date(*map(int, conf.end_date.split('-')))
-date_selector = DateRangeSlider(title='Date', start=start_date, 
-    value=(start_date, end_date), end=end_date, 
-    step=1, callback_policy="mouseup")
 
-hours_selector = RangeSlider(title="Hours Range", start=0, end=23, value=(0,24))
+date_selector = DateRangeSlider(title='Date', start=start_date,
+                                value=(start_date, end_date),
+                                end=end_date, step=1,
+                                callback_policy="mouseup")
+
+hours_selector = RangeSlider(title="Hours Range", start=0, end=23, value=(0, 24))
 
 selectors = []
 for selector_details in conf.selectors:
@@ -305,10 +276,17 @@ for selector_details in conf.selectors:
 
     title_text = '{}: '.format(title)
 
-    selector = MultiSelect(title=title_text, value=[opts[0]], options=opts, size=4, name=column_name)
-    selectors.append(selector)
+    selector_opts = dict(title=title_text,
+                         value=[opts[0]],
+                         options=opts,
+                         size=4,
+                         name=column_name)
+
+    multi_selector = MultiSelect(**selector_opts)
+    selectors.append(multi_selector)
 
 source_json = geojson.loads(geo_source.geojson)
+
 data_vals = [source_json[i]['properties']['data_val'] for i in range(len(source_json['features']))]
 min_val = min(data_vals)
 max_val = max(data_vals)
@@ -320,14 +298,14 @@ geomap_tooltips = [("Ticket Count", "@data_val")]
 
 ##create map
 geomap_opts = {
-    'background_fill_color': None, 
+    'background_fill_color': None,
     'plot_width': 800,
-    'tooltips': geomap_tooltips, 
+    'tooltips': geomap_tooltips,
     'tools': '',
     'x_axis_type': "mercator",
     'y_axis_type': "mercator",
     'x_range': (-9789724.66045665, -9742970.474323519),
-    'y_range': (5107551.543942757,5164699.247119262),
+    'y_range': (5107551.543942757, 5164699.247119262),
     'output_backend': 'webgl'
 }
 geomap = figure(**geomap_opts)
@@ -355,7 +333,7 @@ patches_opts = {
     'xs': 'xs',
     'ys': 'ys',
     'source': geo_source,
-    'fill_color': {'field': 'data_val', 'transform': color_mapper}, 
+    'fill_color': {'field': 'data_val', 'transform': color_mapper},
     'line_color': 'black',
     'line_width': .01,
     'fill_alpha': 0.9
@@ -388,7 +366,6 @@ chart.xaxis.visible = False
 chart_lines = None
 chart_hover = None
 
- 
 chart.toolbar.logo = None
 chart.toolbar_location = None
 
@@ -414,12 +391,11 @@ chart_rbg_radios = RadioButtonGroup(labels=chart_rbg_labels, active=0)
 
 chart_rbg_div = Div(text="Chart Lines By: ")
 chart_labels = [s['title'] for s in conf.selectors]
-select_chart_radios = RadioButtonGroup(
-        labels=chart_labels, active=0)
+select_chart_radios = RadioButtonGroup(labels=chart_labels, active=0)
 
 ticker = LogTicker(desired_num_ticks=8)
 
-color_bar = ColorBar(color_mapper=color_mapper, ticker=ticker, location=(0,0))
+color_bar = ColorBar(color_mapper=color_mapper, ticker=ticker, location=(0, 0))
 geomap.add_layout(color_bar, 'right')
 geomap.right[0].formatter.use_scientific = False
 
@@ -430,10 +406,10 @@ radios_and_divs = [
 ]
 
 controls = [
-    *datetime_selectors, *selectors, *radios_and_divs, 
+    *datetime_selectors, *selectors, *radios_and_divs,
     central_bus_toggle, update_button
 ]
-            
+
 inputs = widgetbox(*controls, sizing_mode='fixed', width=420)
 
 col2 = column(geomap, chart)
@@ -442,3 +418,4 @@ col1 = column(inputs)
 l = layout([[col1, col2]], sizing_mode='fixed')
 
 curdoc().add_root(l)
+update()

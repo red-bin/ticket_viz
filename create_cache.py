@@ -1,16 +1,15 @@
 #!/usr/bin/python3
 
-import psycopg2 
+import psycopg2cffi
 import csv 
 import time
 from datetime import date
 from datetime import datetime 
-from dropdown_opts import violation_opts
 
 import viz_config as conf
 
 def pg_conn():  
-     conn = psycopg2.connect(conf.connection_str)  
+     conn = psycopg2cffi.connect(conf.connection_str)  
      return conn
 
 conn = pg_conn() 
@@ -24,7 +23,7 @@ def ticket_data():
     WHERE grid_id >= 1 
     AND issue_date >= %s
     AND issue_date <= %s
-    GROUP BY grid_id, violation_description, make_date(year, month, dom), dow, year, hour, ward, department_category, ticket_queue, is_business_district, current_amount_due, total_payments, penalty, fine_level1_amount, hearing_disposition 
+    GROUP BY grid_id, violation_description, make_date(year, month, dom), dow, year, hour, ward, department_category, ticket_queue, is_business_district, current_amount_due, total_payments, penalty, fine_level1_amount, hearing_disposition
     ORDER BY issue_date
     """
     
@@ -66,7 +65,7 @@ def selector_opts(field_name, sorted_by, order='desc', cache=True):
     results = curs.fetchall()
     total = sum([i[1] for i in results])
 
-    dropdown_vals = ['{} ({})'.format(i[0],i[1]) for i in results]
+    dropdown_vals = ['{} ({})'.format(i[0],i[1]) for i in results if i[1]]
     dropdown_vals.insert(0, 'All ({})'.format(total))
 
     return dropdown_vals
@@ -94,12 +93,13 @@ def create_cache():
     date_format = '%Y-%m-%d'
 
     w = csv.writer(open('/opt/ticket_viz/data/tickets.{}.csv'.format(conf.environment),'w'))
-    cols = ['grid_id', 'violation_description', 'dow', 'year','hour', 'ward', 'department_category', 'ticket_queue', 'is_business_district', 'current_amount_due', 'total_payments', 'penalty', 'fine_level1_amount', 'hearing_disposition', 'week_idx', 'day_idx', 'month_idx']
+    cols = ['grid_id', 'violation_description', 'dow', 'year','hour', 'ward', 'department_category', 'ticket_queue', 'is_business_district', 'current_amount_due', 'total_payments', 'penalty', 'fine_level1_amount', 'hearing_disposition', 'dismissal_reason', 'week_idx', 'day_idx', 'month_idx']
     w.writerow(cols)
 
     indexable_cols = [(s['column_name'], cols.index(s['column_name'])) for s in conf.selectors]
 
-    for row in ticket_data():
+    data = ticket_data()
+    for row in data:
         dow = row[3]
         issue_date = row[2]
 
@@ -116,7 +116,6 @@ def create_cache():
         new_row.pop(2) #only temporarily needed
 
         for column_name, col_idx in indexable_cols:
-
             col_val = str(new_row[col_idx])
             new_row[col_idx] = opts_txt[column_name].index(col_val)
 
