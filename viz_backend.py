@@ -194,13 +194,13 @@ def timeseries_from_df(df, agg_mode, aggreg_by, chart_mode, resolution_mode):
 
     return ret_dict
 
-def get_data(agg_mode='count', start_time=None, end_time=None, aggreg_by=None, chart_mode=None, resolution_mode=None, **kwargs):
+def get_data(agg_mode='count', start_time=None, end_time=None, aggreg_by=None, chart_mode=None, resolution_mode=None, start_hour=None, end_hour=None, **kwargs):
     #hash of dict = cache file location
     md5obj = md5()
 
     md5_kwargs = [kwargs[k] for k in sorted(kwargs.keys())]
 
-    md5_input = '|'.join(map(str, (start_time, end_time, agg_mode, aggreg_by, chart_mode, resolution_mode, md5_kwargs)))
+    md5_input = '|'.join(map(str, (start_time, start_hour, end_hour, end_time, agg_mode, aggreg_by, chart_mode, resolution_mode, md5_kwargs)))
 
     md5obj.update(md5_input.encode('utf-8'))
 
@@ -224,9 +224,9 @@ def get_data(agg_mode='count', start_time=None, end_time=None, aggreg_by=None, c
 
     if not kwargs['include_cbd']:
         new_datas = new_datas[new_datas.is_business_district != True]
-    if kwargs['start_hour'] != 0:
+    if start_hour != 0:
         new_datas = new_datas[new_datas.hour >= start_hour]
-    if kwargs['end_hour'] != 24:
+    if end_hour != 24:
         new_datas = new_datas[new_datas.hour <= end_hour]
   
     date_format = '%Y-%m-%d'
@@ -309,6 +309,8 @@ class GeoJsonEndpoint(Resource):
         req_json = json.loads(request.form['data'])
         req_json['end_time'] = datetime.strptime(req_json['end_time'], '%Y-%m-%d')
         req_json['start_time'] = datetime.strptime(req_json['start_time'], '%Y-%m-%d')
+        req_json['start_hour'] = req_json['start_hour']
+        req_json['end_hour'] = req_json['end_hour']
 
         ret = get_data(**req_json)
 

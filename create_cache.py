@@ -93,7 +93,7 @@ def create_cache():
     date_format = '%Y-%m-%d'
 
     w = csv.writer(open('/opt/ticket_viz/data/tickets.{}.csv'.format(conf.environment),'w'))
-    cols = ['grid_id', 'violation_description', 'dow', 'year','hour', 'ward', 'department_category', 'ticket_queue', 'is_business_district', 'current_amount_due', 'total_payments', 'penalty', 'fine_level1_amount', 'hearing_disposition', 'dismissal_reason', 'week_idx', 'day_idx', 'month_idx']
+    cols = ['grid_id', 'violation_description', 'dow', 'year','hour', 'ward', 'department_category', 'ticket_queue', 'is_business_district', 'current_amount_due', 'total_payments', 'penalty', 'fine_level1_amount', 'hearing_disposition', 'week_idx', 'day_idx', 'month_idx']
     w.writerow(cols)
 
     indexable_cols = [(s['column_name'], cols.index(s['column_name'])) for s in conf.selectors]

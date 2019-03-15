@@ -44,6 +44,7 @@ opts_fields = [
 selector_opts = {}
 for opt_field in opts_fields:
     fp = '{}/{}.{}.txt'.format(conf.dropdown_dir, opt_field, conf.environment)
+    print(fp)
     with open(fp, 'r') as fh:
         selector_opts[opt_field] = [i.rstrip() for i in fh.readlines()]
 
@@ -159,9 +160,12 @@ def update_chart(timeseries_data):
         else:
             of_or_from = 'From'
 
-        title_vals = [chart_mode, agg_mode, of_or_from, chart_by]
+        cumm_modes = ['', 'Cummulative ']
+        cumm_mode = cumm_modes[chart_rbg_radios.active]
 
-        chart_title.text = '{} {} {} Tickets By {}'.format(*title_vals)
+        title_vals = [cumm_mode, chart_mode, agg_mode, of_or_from, chart_by]
+
+        chart_title.text = '{}{} {} {} Tickets By {}'.format(*title_vals)
 
         for tool in chart.tools:
             if tool.name == 'chart_hovertool':
@@ -253,7 +257,7 @@ date_selector = DateRangeSlider(title='Date', start=start_date,
                                 end=end_date, step=1,
                                 callback_policy="mouseup")
 
-hours_selector = RangeSlider(title="Hours Range", start=0, end=23, value=(0, 24))
+hours_selector = RangeSlider(title="Hours Range", start=0, end=23, value=(0, 23))
 
 selectors = []
 for selector_details in conf.selectors:
@@ -276,13 +280,13 @@ for selector_details in conf.selectors:
 
     title_text = '{}: '.format(title)
 
-    selector_opts = dict(title=title_text,
+    selector_params = dict(title=title_text,
                          value=[opts[0]],
                          options=opts,
                          size=4,
                          name=column_name)
 
-    multi_selector = MultiSelect(**selector_opts)
+    multi_selector = MultiSelect(**selector_params)
     selectors.append(multi_selector)
 
 source_json = geojson.loads(geo_source.geojson)
